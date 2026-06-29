@@ -3,7 +3,7 @@ import { Terminal, X, Trash2 } from 'lucide-react';
 
 interface ConsoleMessage {
   id: number;
-  type: 'log' | 'error' | 'warn' | 'info';
+  type: 'log' | 'error' | 'warn' | 'info' | 'separator';
   message: string;
   timestamp: Date;
 }
@@ -28,9 +28,16 @@ const ConsolePanel = ({ theme, isVisible, onToggle }: ConsolePanelProps) => {
   }, [messages]);
 
   useEffect(() => {
-    // Interceptar console.log del iframe
     const handleMessage = (event: MessageEvent) => {
-      if (event.data && event.data.type === 'console') {
+      if (event.data?.type === 'run-start') {
+        setMessages(prev => {
+          if (prev.length === 0) return prev;
+          return [...prev, { id: messageIdCounter.current++, type: 'separator', message: '', timestamp: new Date() }];
+        });
+        return;
+      }
+
+      if (event.data?.type === 'console') {
         const newMessage: ConsoleMessage = {
           id: messageIdCounter.current++,
           type: event.data.level || 'log',
@@ -42,15 +49,10 @@ const ConsolePanel = ({ theme, isVisible, onToggle }: ConsolePanelProps) => {
     };
 
     window.addEventListener('message', handleMessage);
-
-    return () => {
-      window.removeEventListener('message', handleMessage);
-    };
+    return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  const clearConsole = () => {
-    setMessages([]);
-  };
+  const clearConsole = () => setMessages([]);
 
   const getMessageIcon = (type: string) => {
     switch (type) {
@@ -97,21 +99,21 @@ const ConsolePanel = ({ theme, isVisible, onToggle }: ConsolePanelProps) => {
             className={`text-xs px-2 py-1 rounded-full ${
               theme === 'dark' ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'
             }`}>
-            {messages.length}
+            {messages.filter(m => m.type !== 'separator').length}
           </span>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={clearConsole}
-            className={`p-1 rounded hover:${theme === 'dark' ? 'bg-gray-700' : 'bg-gray-200'} transition-colors`}
+            className={`p-1 rounded transition-colors ${theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
             title="Limpiar consola">
             <Trash2 size={14} className={theme === 'dark' ? 'text-gray-400' : 'text-gray-600'} />
           </button>
 
           <button
             onClick={onToggle}
-            className={`p-1 rounded hover:${theme === 'dark' ? 'bg-gray-700' : 'bg-gray-200'} transition-colors`}
+            className={`p-1 rounded transition-colors ${theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
             title="Cerrar consola">
             <X size={14} className={theme === 'dark' ? 'text-gray-400' : 'text-gray-600'} />
           </button>
@@ -127,19 +129,33 @@ const ConsolePanel = ({ theme, isVisible, onToggle }: ConsolePanelProps) => {
             <p className="text-xs">Los mensajes de console.log aparecerán aquí</p>
           </div>
         ) : (
-          messages.map(message => (
-            <div
-              key={message.id}
-              className={`flex items-start gap-2 px-2 py-1 rounded text-sm font-mono ${
-                theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-50'
-              } transition-colors`}>
-              <span className="flex-shrink-0 text-xs">{getMessageIcon(message.type)}</span>
-              <span className={`flex-1 ${getMessageColor(message.type)}`}>{message.message}</span>
-              <span className={`flex-shrink-0 text-xs ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
-                {message.timestamp.toLocaleTimeString()}
-              </span>
-            </div>
-          ))
+          messages.map(message =>
+            message.type === 'separator' ? (
+              <div
+                key={message.id}
+                className={`flex items-center gap-2 my-1 text-xs ${
+                  theme === 'dark' ? 'text-gray-600' : 'text-gray-300'
+                }`}>
+                <div className={`flex-1 h-px ${theme === 'dark' ? 'bg-gray-700' : 'bg-gray-200'}`} />
+                <span>nueva ejecución</span>
+                <div className={`flex-1 h-px ${theme === 'dark' ? 'bg-gray-700' : 'bg-gray-200'}`} />
+              </div>
+            ) : (
+              <div
+                key={message.id}
+                className={`flex items-start gap-2 px-2 py-1 rounded text-sm font-mono ${
+                  theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-50'
+                } transition-colors`}>
+                <span className="flex-shrink-0 text-xs">{getMessageIcon(message.type)}</span>
+                <span className={`flex-1 whitespace-pre-wrap break-all ${getMessageColor(message.type)}`}>
+                  {message.message}
+                </span>
+                <span className={`flex-shrink-0 text-xs ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+                  {message.timestamp.toLocaleTimeString()}
+                </span>
+              </div>
+            )
+          )
         )}
         <div ref={messagesEndRef} />
       </div>
