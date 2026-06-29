@@ -1,15 +1,14 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ChangeEvent } from 'react';
 import Editor from './components/Editor';
 import KeyboardShortcuts from './components/KeyboardShortcuts';
 import ConsolePanel from './components/ConsolePanel';
-import { Play, Save, Download, Upload, RotateCcw, Settings, Moon, Sun, Terminal } from 'lucide-react';
+import { Play, Save, Download, Upload, RotateCcw, Settings, Moon, Sun, Terminal, Share2 } from 'lucide-react';
 
-// Hook personalizado para localStorage
-const useLocalStorage = (key, initialValue) => {
-  const [storedValue, setStoredValue] = useState(() => {
+function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => void] {
+  const [storedValue, setStoredValue] = useState<T>(() => {
     try {
       const item = localStorage.getItem(key);
-      return item ? JSON.parse(item) : initialValue;
+      return item ? (JSON.parse(item) as T) : initialValue;
     } catch (error) {
       console.warn(`Error reading localStorage key "${key}":`, error);
       return initialValue;
@@ -17,7 +16,7 @@ const useLocalStorage = (key, initialValue) => {
   });
 
   const setValue = useCallback(
-    value => {
+    (value: T) => {
       try {
         setStoredValue(value);
         localStorage.setItem(key, JSON.stringify(value));
@@ -29,6 +28,30 @@ const useLocalStorage = (key, initialValue) => {
   );
 
   return [storedValue, setValue];
+}
+
+// URL sharing — encode/decode state as base64 hash
+const encodeState = (html: string, css: string, js: string): string => {
+  try {
+    const json = JSON.stringify({ html, css, js });
+    const bytes = new TextEncoder().encode(json);
+    const binary = Array.from(bytes, b => String.fromCharCode(b)).join('');
+    return btoa(binary);
+  } catch {
+    return '';
+  }
+};
+
+const decodeState = (hash: string): { html: string; css: string; js: string } | null => {
+  try {
+    const binary = atob(hash);
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    const json = new TextDecoder().decode(bytes);
+    const parsed = JSON.parse(json) as { html?: string; css?: string; js?: string };
+    return { html: parsed.html ?? '', css: parsed.css ?? '', js: parsed.js ?? '' };
+  } catch {
+    return null;
+  }
 };
 
 // Plantillas predefinidas
@@ -257,9 +280,10 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showConsole, setShowConsole] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState('blank');
+  const [copied, setCopied] = useState(false);
 
-  const iframeRef = useRef(null);
-  const timeoutRef = useRef(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Función para ejecutar el código
   const runCode = useCallback(() => {
@@ -282,54 +306,44 @@ function App() {
         <body>
           ${html}
           <script>
-            // Interceptar console.log para enviar a la consola del editor
+            window.parent.postMessage({ type: 'run-start' }, '*');
+
+            function __serialize(args) {
+              return args.map(function(a) {
+                if (a === null) return 'null';
+                if (a === undefined) return 'undefined';
+                if (typeof a === 'object') { try { return JSON.stringify(a); } catch(e) { return String(a); } }
+                return String(a);
+              }).join(' ');
+            }
+
             const originalLog = console.log;
             const originalError = console.error;
             const originalWarn = console.warn;
             const originalInfo = console.info;
-            
+
             console.log = function(...args) {
               originalLog.apply(console, args);
-              window.parent.postMessage({
-                type: 'console',
-                level: 'log',
-                message: args.join(' ')
-              }, '*');
+              window.parent.postMessage({ type: 'console', level: 'log', message: __serialize(args) }, '*');
             };
-            
             console.error = function(...args) {
               originalError.apply(console, args);
-              window.parent.postMessage({
-                type: 'console',
-                level: 'error',
-                message: args.join(' ')
-              }, '*');
+              window.parent.postMessage({ type: 'console', level: 'error', message: __serialize(args) }, '*');
             };
-            
             console.warn = function(...args) {
               originalWarn.apply(console, args);
-              window.parent.postMessage({
-                type: 'console',
-                level: 'warn',
-                message: args.join(' ')
-              }, '*');
+              window.parent.postMessage({ type: 'console', level: 'warn', message: __serialize(args) }, '*');
             };
-            
             console.info = function(...args) {
               originalInfo.apply(console, args);
-              window.parent.postMessage({
-                type: 'console',
-                level: 'info',
-                message: args.join(' ')
-              }, '*');
+              window.parent.postMessage({ type: 'console', level: 'info', message: __serialize(args) }, '*');
             };
-            
-            // Error handling
+
             window.addEventListener('error', function(e) {
               console.error('Error:', e.message);
               document.body.innerHTML += '<div style="background: #ffebee; color: #c62828; padding: 10px; margin: 10px 0; border-radius: 4px; border-left: 4px solid #c62828;"><strong>Error:</strong> ' + e.message + '</div>';
             });
-            
+
             try {
               ${js}
             } catch (error) {
@@ -360,6 +374,26 @@ function App() {
     };
   }, [html, css, js, isAutoRun, runCode]);
 
+  // Carga estado desde URL hash al montar (tiene prioridad sobre localStorage)
+  useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    if (!hash) return;
+    const decoded = decodeState(hash);
+    if (!decoded) return;
+    setHtml(decoded.html);
+    setCss(decoded.css);
+    setJs(decoded.js);
+  }, [setHtml, setCss, setJs]);
+
+  // Actualiza el hash al cambiar el código (debounced, sin crear entradas en historial)
+  useEffect(() => {
+    const id = setTimeout(() => {
+      const encoded = encodeState(html, css, js);
+      window.history.replaceState(null, '', encoded ? `#${encoded}` : window.location.pathname);
+    }, 500);
+    return () => clearTimeout(id);
+  }, [html, css, js]);
+
   // Funciones de utilidad
   const saveProject = () => {
     const project = {
@@ -383,21 +417,26 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  const loadProject = event => {
-    const file = event.target.files[0];
+  const loadProject = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = e => {
         try {
-          const project = JSON.parse(e.target.result);
-          setHtml(project.html || '');
-          setCss(project.css || '');
-          setJs(project.js || '');
-        } catch (error) {
+          const project = JSON.parse(e.target?.result as string) as {
+            html?: string;
+            css?: string;
+            js?: string;
+          };
+          setHtml(project.html ?? '');
+          setCss(project.css ?? '');
+          setJs(project.js ?? '');
+        } catch {
           alert('Error al cargar el archivo. Asegúrate de que sea un archivo JSON válido.');
         }
       };
       reader.readAsText(file);
+      setSelectedTemplate('blank');
     }
   };
 
@@ -406,10 +445,12 @@ function App() {
       setHtml('');
       setCss('');
       setJs('');
+      setSelectedTemplate('blank');
+      window.history.replaceState(null, '', window.location.pathname);
     }
   };
 
-  const loadTemplate = templateKey => {
+  const loadTemplate = (templateKey: keyof typeof templates) => {
     const template = templates[templateKey];
     setHtml(template.html);
     setCss(template.css);
@@ -445,6 +486,16 @@ function App() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const shareProject = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      prompt('Copia este enlace:', window.location.href);
+    }
   };
 
   const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
@@ -492,6 +543,15 @@ function App() {
               className="flex items-center gap-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 transition-colors">
               <Save size={16} />
               Guardar
+            </button>
+
+            <button
+              onClick={shareProject}
+              className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors ${
+                copied ? 'bg-green-600 text-white' : 'bg-teal-500 text-white hover:bg-teal-600'
+              }`}>
+              <Share2 size={16} />
+              {copied ? '¡Copiado!' : 'Compartir'}
             </button>
 
             <label className="flex items-center gap-2 px-3 py-1 bg-purple-500 text-white rounded text-sm hover:bg-purple-600 transition-colors cursor-pointer">
@@ -603,8 +663,7 @@ function App() {
           ref={iframeRef}
           title="output"
           sandbox="allow-scripts allow-modals allow-forms allow-popups allow-popups-to-escape-sandbox"
-          frameBorder="0"
-          className="w-full h-full bg-white"
+          className="w-full h-full bg-white border-0"
         />
       </div>
 
